@@ -1,0 +1,14 @@
+{
+	"luci-app-arcane": {
+		"description": "Grant access to LuCI app arcane",
+		"read": {
+			"ubus": {
+				"service": [ "list" ]
+			},
+			"uci": [ "arcane" ]
+		},
+		"write": {
+			"uci": [ "arcane" ]
+		}
+	}
+}

@@ -1,0 +1,78 @@
+#!/bin/sh /etc/rc.common
+# SPDX-License-Identifier: BSD-3-Clause
+
+USE_PROCD=1
+START=99
+STOP=10
+
+CONF="arcane"
+PROG="/usr/bin/arcane"
+
+rand_str() {
+	tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c "$1"
+}
+
+get_lan_ip() {
+	local ip
+	ip="$(uci -q get network.lan.ipaddr | cut -d/ -f1)"
+	[ -n "$ip" ] || ip="$(ubus call network.interface.lan status 2>/dev/null | jsonfilter -e '@["ipv4-address"][0].address')"
+	echo "${ip:-127.0.0.1}"
+}
+
+start_service() {
+	local enabled port listen app_url data_dir docker_host encryption_key jwt_secret changed=0
+
+	config_load "$CONF"
+	config_get_bool enabled main enabled 0
+	[ "$enabled" -eq 1 ] || return 0
+
+	config_get port main port 3552
+	config_get listen main listen ""
+	config_get app_url main app_url ""
+	config_get data_dir main data_dir "/opt/arcane"
+	config_get docker_host main docker_host "unix:///var/run/docker.sock"
+	config_get encryption_key main encryption_key ""
+	config_get jwt_secret main jwt_secret ""
+
+	# 首次启动自动生成密钥并持久化（修改 ENCRYPTION_KEY 会导致已加密数据无法解密）
+	if [ -z "$encryption_key" ]; then
+		encryption_key="$(rand_str 32)"
+		uci -q set "$CONF.main.encryption_key=$encryption_key"
+		changed=1
+	fi
+	if [ -z "$jwt_secret" ]; then
+		jwt_secret="$(rand_str 48)"
+		uci -q set "$CONF.main.jwt_secret=$jwt_secret"
+		changed=1
+	fi
+	[ "$changed" -eq 1 ] && uci -q commit "$CONF"
+
+	[ -n "$app_url" ] || app_url="http://$(get_lan_ip):$port"
+
+	mkdir -p "$data_dir/projects" "$data_dir/git"
+	chmod 700 "$data_dir"
+
+	procd_open_instance arcane
+	procd_set_param command /bin/sh -c "cd '$data_dir' && exec $PROG"
+	procd_set_param env \
+		ENVIRONMENT="production" \
+		GIN_MODE="release" \
+		PORT="$port" \
+		APP_URL="$app_url" \
+		DOCKER_HOST="$docker_host" \
+		ENCRYPTION_KEY="$encryption_key" \
+		JWT_SECRET="$jwt_secret" \
+		DATABASE_URL="file:$data_dir/arcane.db?_pragma=journal_mode(WAL)&_pragma=busy_timeout(2500)&_txlock=immediate" \
+		PROJECTS_DIRECTORY="$data_dir/projects" \
+		GIT_WORK_DIR="$data_dir/git" \
+		${listen:+LISTEN="$listen"}
+	procd_set_param limits nofile="65535 65535"
+	procd_set_param respawn 3600 5 5
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+service_triggers() {
+	procd_add_reload_trigger "$CONF"
+}

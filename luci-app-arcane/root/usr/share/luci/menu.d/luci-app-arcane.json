@@ -1,0 +1,14 @@
+{
+	"admin/services/arcane": {
+		"title": "Arcane 容器管理",
+		"order": 60,
+		"action": {
+			"type": "view",
+			"path": "arcane/config"
+		},
+		"depends": {
+			"acl": [ "luci-app-arcane" ],
+			"uci": { "arcane": true }
+		}
+	}
+}
